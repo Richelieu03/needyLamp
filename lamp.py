@@ -14,7 +14,7 @@ Standalone test:
 """
 
 import pygame
-from lamp_skins import LampSkin, DeskLamp
+from lamp_skins import LampSkin, GooseneckLamp
 
 # ---------- State ----------
 _target = 0.0      # Target brightness: 0 = off, 1 = on (changed by set_light)
@@ -22,7 +22,7 @@ _level = 0.0       # Current brightness; moves toward _target each frame to crea
 FADE_SPEED = 3.0   # Fade speed in brightness units per second (about 1/3 s for a full fade)
 FPS = 60
 
-DEFAULT_SKIN = DeskLamp
+DEFAULT_SKIN = GooseneckLamp
 _skin: LampSkin = DEFAULT_SKIN()
 
 
