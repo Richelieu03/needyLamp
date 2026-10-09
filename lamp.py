@@ -7,11 +7,14 @@ lamp looks; all drawing is delegated to a skin from lamp_skins.py.
 Interface:
     lamp.set_light(on: bool)   Set the lamp's target state. Returns immediately; safe to call from another thread.
     lamp.set_skin(skin)        Optional: choose a look (a LampSkin instance). Call before run().
+    lamp.set_key_handler(fn)   Optional: forward Y/N presses from this window to the controller.
     lamp.run()                 Open the window and run the pygame main loop (must be called on the main thread).
 
 Standalone test:
     python lamp.py             Press Space to toggle on/off; press Esc or close the window to quit.
 """
+
+from collections.abc import Callable
 
 import pygame
 from lamp_skins import LampSkin, DeskLamp
@@ -24,6 +27,7 @@ FPS = 60
 
 DEFAULT_SKIN = DeskLamp
 _skin: LampSkin = DEFAULT_SKIN()
+_key_handler: Callable[[str], None] | None = None
 
 
 def set_light(on: bool) -> None:
@@ -40,6 +44,12 @@ def set_skin(skin: LampSkin) -> None:
     """Choose which skin draws the lamp. Call before run()."""
     global _skin
     _skin = skin
+
+
+def set_key_handler(handler: Callable[[str], None] | None) -> None:
+    """Forward Y/N key presses to the controller when one is registered."""
+    global _key_handler
+    _key_handler = handler
 
 
 def _step_level(level: float, target: float, dt: float) -> float:
@@ -76,6 +86,8 @@ def run() -> None:
                     running = False
                 elif event.key == pygame.K_SPACE:
                     set_light(not is_on())   # Manual toggle for testing
+                elif event.key in (pygame.K_y, pygame.K_n) and _key_handler is not None:
+                    _key_handler("y" if event.key == pygame.K_y else "n")
 
         _level = _step_level(_level, _target, dt)
         _skin.draw(screen, _level, is_on(), t)
