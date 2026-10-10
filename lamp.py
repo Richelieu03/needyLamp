@@ -19,6 +19,7 @@ Standalone test:
 """
 
 from collections.abc import Callable
+from pathlib import Path
 
 import pygame
 from lamp_skins import LampSkin, GooseneckLamp
@@ -88,6 +89,15 @@ def run(mouse_focus: bool = False) -> None:
     """
     global _level, _minimized
     pygame.init()
+    on_sound = None
+    if pygame.mixer.get_init():
+        try:
+            on_sound = pygame.mixer.Sound(str(Path(__file__).parent / "assets" / "lamp_on.wav"))
+        except (pygame.error, OSError) as exc:
+            print(f"Lamp sound unavailable: {exc}")
+    else:
+        print("Lamp sound unavailable: no audio device")
+    was_on = False
     screen = pygame.display.set_mode(_skin.size)
     pygame.display.set_caption(_skin.title)
     _skin.setup()
@@ -120,9 +130,13 @@ def run(mouse_focus: bool = False) -> None:
                 w, h = screen.get_size()
                 set_focus((event.pos[0] / w * 2 - 1, event.pos[1] / h * 2 - 1))
 
+        on = is_on()
+        if on and not was_on and on_sound is not None:
+            on_sound.play()
+        was_on = on
         _level = _step_level(_level, _target, dt)
         _skin.set_focus(_focus)
-        _skin.draw(screen, _level, is_on(), t)
+        _skin.draw(screen, _level, on, t)
         pygame.display.flip()
 
     pygame.quit()

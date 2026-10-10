@@ -180,6 +180,8 @@ class GooseneckLamp(DeskLamp):
     TURN_TO_YOU = 28        # Degrees the shade turns toward you (0 = side view)
     FOLLOW_X = 20           # Degrees of head tilt as you move left/right
     FOLLOW_Y = 16           # Degrees of head tilt as you move up/down
+    TRACK_X = 58            # How far the head follows your face horizontally, in pixels
+    TRACK_Y = 36            # How far the head follows your face vertically, in pixels
     PERK_UP = 6             # Degrees the neck straightens when it sees you
     FOCUS_SPEED = 4.0       # How quickly it turns to you (higher = faster)
 
@@ -227,8 +229,8 @@ class GooseneckLamp(DeskLamp):
         self.bulb_shape = [(self.SHADE_LEN - 0.5 + 4 * math.cos(a), 17 * math.sin(a))
                            for a in (2 * math.pi * i / 20 for i in range(20))]
 
-    def _neck_points(self, bend, lift=0.0):
-        """Points along the neck as ((x, y), tangent_angle, radius), from base to head."""
+    def _neck_points(self, bend, lift=0.0, follow=(0.0, 0.0)):
+        """Curve the neck toward the face while keeping its base anchored."""
         n = self.NECK_SEGMENTS
         ds = self.NECK_LENGTH / n
         x, y = self.BASE_POS[0], self.BASE_POS[1] - 20 - lift
@@ -239,7 +241,19 @@ class GooseneckLamp(DeskLamp):
             x += math.cos(a) * ds
             y += math.sin(a) * ds
             out.append(((x, y), a, lerp(self.NECK_BASE_R, self.NECK_TIP_R, (i + 1) / n)))
-        return out
+        if follow == (0.0, 0.0):
+            return out
+        tracked = []
+        previous = None
+        for i, ((x, y), angle, radius) in enumerate(out):
+            # Most of the movement happens near the head; the base stays put.
+            amount = (i / n) ** 2.2
+            point = (x + follow[0] * amount, y + follow[1] * amount)
+            if previous is not None:
+                angle = math.atan2(point[1] - previous[1], point[0] - previous[0])
+            tracked.append((point, angle, radius))
+            previous = point
+        return tracked
 
     def set_focus(self, focus):
         self.focus = focus
@@ -354,7 +368,8 @@ class GooseneckLamp(DeskLamp):
         self._step_focus(on, t)
         att = self.attention
         bend = lerp(*self.NECK_BEND, p) + mood.bend - self.PERK_UP * att
-        neck = self._neck_points(bend, mood.hop)
+        follow_position = (att * self.fx * self.TRACK_X, att * self.fy * self.TRACK_Y)
+        neck = self._neck_points(bend, mood.hop, follow_position)
         head = neck[-1][0]
         follow = att * (-self.fx * self.FOLLOW_X + self.fy * self.FOLLOW_Y)
         angle = math.radians(-90 + bend + lerp(*self.SHADE_TILT, p) + mood.tilt + follow)
