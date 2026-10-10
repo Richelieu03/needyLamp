@@ -26,7 +26,7 @@ def worker():
             frame = camera.get_frame()
             looking = brain.is_looking(frame)
             face = brain.locate_face(frame)   # (x, y) normalized, or None
-            lamp.set_face_position(face[0] if face else None)
+            lamp.set_face_position(*face) if face else lamp.set_face_position(None)
         except Exception as e:
             print("brain error, treating as not looking:", e)
             looking = False
