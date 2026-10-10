@@ -12,6 +12,15 @@ if not brain.MANUAL_MODE:
 def worker():
     streak = 0
     while True:
+        if not brain.MANUAL_MODE and lamp.is_minimized():
+            # Nobody can see the lamp while it's minimized: release the
+            # camera (turns off the capture indicator, frees the device for
+            # other apps) and skip calling the API until it's restored.
+            camera.release()
+            streak = 0
+            time.sleep(1)
+            continue
+
         try:
             frame = camera.get_frame()
             looking = brain.is_looking(frame)
