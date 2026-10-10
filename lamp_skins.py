@@ -41,7 +41,8 @@ class LampSkin:
     def setup(self) -> None:
         """Called once after pygame.init(). Load fonts and images here."""
 
-    def draw(self, screen: pygame.Surface, level: float, on: bool, t: float) -> None:
+    def draw(self, screen: pygame.Surface, level: float, on: bool, t: float,
+             face_x: float | None = None) -> None:
         """
         Draw one frame.
 
@@ -49,6 +50,9 @@ class LampSkin:
         level:  current brightness, 0.0 (off) to 1.0 (on); already faded smoothly
         on:     the target state (True = should be on)
         t:      seconds since start, for animations
+        face_x: normalized horizontal face position in [0, 1] (0 = left edge
+                of the camera frame, 1 = right edge), or None if no face is
+                currently detected. Optional - most skins can ignore it.
         """
         raise NotImplementedError
 
@@ -77,7 +81,7 @@ class DeskLamp(LampSkin):
                                  True, mix(*self.TEXT, level))
         screen.blit(label, label.get_rect(center=(self.size[0] // 2, 555)))
 
-    def draw(self, screen, level, on, t):
+    def draw(self, screen, level, on, t, face_x=None):
         w, h = self.size
         cx = w // 2
         shade_top_y, shade_bottom_y, desk_y = 150, 250, 500
@@ -160,6 +164,9 @@ class GooseneckLamp(DeskLamp):
     SPRING_K = 55.0                        # Spring stiffness (higher = snappier)
     SPRING_D = 9.0                         # Damping (lower = more bounce)
 
+    TRACK_MAX_DEG = 25.0                   # Max head swivel toward a tracked face, in degrees
+    TRACK_SMOOTH = 4.0                     # How fast the swivel chases its target (higher = snappier)
+
     SUPERSAMPLE = 2                        # Draw at 2x, then scale down
     BLUR = 8                               # Light is shrunk by this factor to blur it
 
@@ -173,6 +180,8 @@ class GooseneckLamp(DeskLamp):
         self.pose = 0.0
         self.vel = 0.0
         self.last_t = None
+        self.track = 0.0       # Current head swivel toward the tracked face, in degrees
+        self.track_last_t = None
         self._build_shade_shapes()
 
     # ---------- Shape helpers (shade-local coordinates, opening along +x) ----------
@@ -225,6 +234,16 @@ class GooseneckLamp(DeskLamp):
         self.vel += acc * dt
         self.pose += self.vel * dt
         return self.pose
+
+    def _step_track(self, face_x, t):
+        """Smoothly swivel the head toward the tracked face's horizontal
+        position; recenters (target 0) when no face is detected. Separate
+        timebase from _step_pose so it degrades gracefully either way."""
+        dt = 0.0 if self.track_last_t is None else min(t - self.track_last_t, 1 / 30)
+        self.track_last_t = t
+        target_deg = 0.0 if face_x is None else (face_x - 0.5) * 2 * self.TRACK_MAX_DEG
+        self.track += (target_deg - self.track) * min(1.0, self.TRACK_SMOOTH * dt)
+        return self.track
 
     # ---------- Light ----------
     def _light_layer(self, to_world, angle, level, desk_y):
@@ -283,7 +302,7 @@ class GooseneckLamp(DeskLamp):
         return pygame.transform.smoothscale(small, (w * S, h * S))
 
     # ---------- Frame ----------
-    def draw(self, screen, level, on, t):
+    def draw(self, screen, level, on, t, face_x=None):
         w, h = self.size
         S = self.SUPERSAMPLE
         desk_y = self.DESK_Y
@@ -292,12 +311,13 @@ class GooseneckLamp(DeskLamp):
 
         # ----- Pose for this frame -----
         p = self._step_pose(on, t)
+        track = self._step_track(face_x, t)                  # head swivel toward the tracked face (degrees)
         sway = (1 - level) * 3.0 * math.sin(t * 1.3)        # idle sigh when off (degrees)
         bob = 1.5 * level * math.sin(t * 2)                  # gentle bob when on (degrees)
         bend = lerp(*self.NECK_BEND, p) + sway + bob
         neck = self._neck_points(bend)
         head = neck[-1][0]
-        angle = math.radians(-90 + bend + lerp(*self.SHADE_TILT, p))
+        angle = math.radians(-90 + bend + lerp(*self.SHADE_TILT, p) + track)
         ca, sa = math.cos(angle), math.sin(angle)
 
         def to_world(x, y):
@@ -397,7 +417,7 @@ class ImageLamp(LampSkin):
         self.on_img = pygame.transform.smoothscale(
             pygame.image.load(self.ON_IMAGE).convert_alpha(), size)
 
-    def draw(self, screen, level, on, t):
+    def draw(self, screen, level, on, t, face_x=None):
         screen.fill((0, 0, 0))
         screen.blit(self.off_img, (0, 0))
         self.on_img.set_alpha(int(255 * level))   # fade ON picture in/out
@@ -409,7 +429,7 @@ class SimpleBulb(LampSkin):
 
     size = (400, 400)
 
-    def draw(self, screen, level, on, t):
+    def draw(self, screen, level, on, t, face_x=None):
         screen.fill(mix((10, 10, 15), (40, 35, 20), level))
         center = (self.size[0] // 2, self.size[1] // 2)
         pygame.draw.circle(screen, mix((60, 60, 65), (255, 230, 150), level), center, 80)

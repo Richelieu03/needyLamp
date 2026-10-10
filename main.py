@@ -18,15 +18,19 @@ def worker():
             # other apps) and skip calling the API until it's restored.
             camera.release()
             streak = 0
+            lamp.set_face_position(None)   # recenter the head while minimized
             time.sleep(1)
             continue
 
         try:
             frame = camera.get_frame()
             looking = brain.is_looking(frame)
+            face = brain.locate_face(frame)   # (x, y) normalized, or None
+            lamp.set_face_position(face[0] if face else None)
         except Exception as e:
             print("brain error, treating as not looking:", e)
             looking = False
+            lamp.set_face_position(None)
             time.sleep(3)             # back off a bit before retrying
         streak = streak + 1 if looking else 0
         lamp.set_light(streak >= 2)   # only turn on after looking for 2 consecutive checks

@@ -6,6 +6,7 @@ lamp looks; all drawing is delegated to a skin from lamp_skins.py.
 
 Interface:
     lamp.set_light(on: bool)   Set the lamp's target state. Returns immediately; safe to call from another thread.
+    lamp.set_face_position(x)  Normalized horizontal face position in [0, 1], or None if no face.
     lamp.set_skin(skin)        Optional: choose a look (a LampSkin instance). Call before run().
     lamp.set_key_handler(fn)   Optional: forward Y/N presses from this window to the controller.
     lamp.run()                 Open the window and run the pygame main loop (must be called on the main thread).
@@ -24,6 +25,7 @@ _target = 0.0      # Target brightness: 0 = off, 1 = on (changed by set_light)
 _level = 0.0       # Current brightness; moves toward _target each frame to create the fade
 FADE_SPEED = 3.0   # Fade speed in brightness units per second (about 1/3 s for a full fade)
 _minimized = False # Whether the window is currently minimized/iconified
+_face_x = None     # Normalized horizontal face position [0, 1]; None = no face detected
 FPS = 60
 
 DEFAULT_SKIN = GooseneckLamp
@@ -45,6 +47,15 @@ def is_minimized() -> bool:
     """Whether the lamp window is currently minimized. Other modules (e.g.
     the camera) can poll this to pause work while nobody can see the lamp."""
     return _minimized
+
+
+def set_face_position(x: float | None) -> None:
+    """Report where the tracked face is, horizontally, in the camera frame
+    (0 = left edge, 1 = right edge), or None if no face is currently
+    detected. Only updates a number and never draws, so it never blocks;
+    safe to call from another thread."""
+    global _face_x
+    _face_x = x
 
 
 def set_skin(skin: LampSkin) -> None:
@@ -104,7 +115,7 @@ def run() -> None:
                 _minimized = False
 
         _level = _step_level(_level, _target, dt)
-        _skin.draw(screen, _level, is_on(), t)
+        _skin.draw(screen, _level, is_on(), t, _face_x)
         pygame.display.flip()
 
     pygame.quit()
