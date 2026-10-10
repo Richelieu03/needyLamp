@@ -138,12 +138,16 @@ class GooseneckLamp(DeskLamp):
     """
 
     DESK_Y = 500
-    BASE_POS = (150, 488)                  # Center of the base on the desk
+    BASE_POS = (130, 488)                  # Center of the base on the desk
+
+    # Neck: fixed length; rises straight from the base and bends mostly near the top
+    NECK_LENGTH = 330
+    BEND_FOCUS = 2.6                       # Higher = bend concentrated nearer the top
+    RIB_SPACING = 5                        # Distance between the ribs on the neck
 
     # Pose as (off, on) pairs — tweak these to change the posture
-    NECK_CTRL = ((125, 330), (100, 220))   # Bezier control point: how the neck bends
-    HEAD_POS = ((225, 282), (250, 172))    # Where the neck ends (the joint at the shade)
-    HEAD_ANGLE = (108, 62)                 # Shade direction in degrees (90 = straight down)
+    NECK_BEND = (150, 95)                  # Total bend of the neck, in degrees
+    SHADE_TILT = (50, 57)                  # Extra tilt of the shade at the joint, in degrees
 
     NECK_BASE_R = 9.0                      # Neck radius at the base
     NECK_TIP_R = 5.5                       # Neck radius at the head
@@ -196,6 +200,20 @@ class GooseneckLamp(DeskLamp):
                       for a in (2 * math.pi * i / 28 for i in range(28))]
         self.bulb_shape = [(self.SHADE_LEN - 0.5 + 4 * math.cos(a), 17 * math.sin(a))
                            for a in (2 * math.pi * i / 20 for i in range(20))]
+
+    def _neck_points(self, bend):
+        """Points along the neck as ((x, y), tangent_angle, radius), from base to head."""
+        n = self.NECK_SEGMENTS
+        ds = self.NECK_LENGTH / n
+        x, y = self.BASE_POS[0], self.BASE_POS[1] - 20
+        out = [((x, y), math.radians(-90), self.NECK_BASE_R)]
+        for i in range(n):
+            s = (i + 0.5) / n
+            a = math.radians(-90 + bend * s ** self.BEND_FOCUS)
+            x += math.cos(a) * ds
+            y += math.sin(a) * ds
+            out.append(((x, y), a, lerp(self.NECK_BASE_R, self.NECK_TIP_R, (i + 1) / n)))
+        return out
 
     # ---------- Motion ----------
     def _step_pose(self, on, t):
@@ -274,14 +292,12 @@ class GooseneckLamp(DeskLamp):
 
         # ----- Pose for this frame -----
         p = self._step_pose(on, t)
-        sway = (1 - level) * 2.0 * math.sin(t * 1.3)        # idle sigh when off
-        bob = 3 * level * math.sin(t * 2)                    # gentle bob when on
-        p0 = (self.BASE_POS[0], self.BASE_POS[1] - 8)
-        p1 = (lerp(self.NECK_CTRL[0][0], self.NECK_CTRL[1][0], p),
-              lerp(self.NECK_CTRL[0][1], self.NECK_CTRL[1][1], p))
-        head = (lerp(self.HEAD_POS[0][0], self.HEAD_POS[1][0], p) + sway,
-                lerp(self.HEAD_POS[0][1], self.HEAD_POS[1][1], p) + bob)
-        angle = math.radians(lerp(*self.HEAD_ANGLE, p) + sway * 1.5)
+        sway = (1 - level) * 3.0 * math.sin(t * 1.3)        # idle sigh when off (degrees)
+        bob = 1.5 * level * math.sin(t * 2)                  # gentle bob when on (degrees)
+        bend = lerp(*self.NECK_BEND, p) + sway + bob
+        neck = self._neck_points(bend)
+        head = neck[-1][0]
+        angle = math.radians(-90 + bend + lerp(*self.SHADE_TILT, p))
         ca, sa = math.cos(angle), math.sin(angle)
 
         def to_world(x, y):
@@ -308,16 +324,25 @@ class GooseneckLamp(DeskLamp):
         pygame.draw.ellipse(c, metal_dark, ((bx - 64) * S, (by - 14) * S, 128 * S, 26 * S))
         pygame.draw.ellipse(c, metal, ((bx - 60) * S, (by - 17) * S, 120 * S, 22 * S))
 
+        # Collar where the neck meets the base
+        pygame.draw.rect(c, metal_dark, ((bx - 12) * S, (by - 24) * S, 24 * S, 16 * S))
+        pygame.draw.rect(c, metal, ((bx - 10) * S, (by - 24) * S, 14 * S, 16 * S))
+        pygame.draw.ellipse(c, metal_hi, ((bx - 12) * S, (by - 28) * S, 24 * S, 8 * S))
+
         # ----- Tapered neck: dark rim, body, highlight -----
-        n = self.NECK_SEGMENTS
-        pts = [(bezier(p0, p1, head, i / n), lerp(self.NECK_BASE_R, self.NECK_TIP_R, i / n))
-               for i in range(n + 1)]
+        pts = [(pt, r) for pt, _, r in neck]
         for pt, r in pts:
             pygame.draw.circle(c, metal_dark, P(pt), r * S)
         for pt, r in pts:
             pygame.draw.circle(c, metal, P((pt[0] - r * 0.15, pt[1] - r * 0.1)), r * 0.78 * S)
         pygame.draw.lines(c, metal_hi, False,
                           [P((pt[0] - r * 0.38, pt[1] - r * 0.25)) for pt, r in pts], int(2.2 * S))
+
+        # Ribs: thin rings across the neck, typical of a gooseneck
+        step = max(1, round(self.RIB_SPACING / (self.NECK_LENGTH / self.NECK_SEGMENTS)))
+        for (x, y), a, r in neck[step:-step:step]:
+            nx, ny = -math.sin(a) * r * 0.85, math.cos(a) * r * 0.85
+            pygame.draw.line(c, metal_dark, P((x - nx, y - ny)), P((x + nx, y + ny)), S)
 
         # Joint between neck and shade
         pygame.draw.circle(c, metal_dark, P(head), 11 * S)
