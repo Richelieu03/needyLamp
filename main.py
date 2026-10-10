@@ -10,20 +10,19 @@ if not brain.MANUAL_MODE:
     import camera  # A: camera.get_frame() -> str (base64 JPEG)
 
 def worker():
-    looking_streak = 0
-    away_streak = 0
-    lamp.set_light(False)
+    streak = 0
     while True:
-        frame = "" if brain.MANUAL_MODE else camera.get_frame()
-        looking = brain.is_looking(frame)
-        looking_streak = looking_streak + 1 if looking else 0
-        away_streak = away_streak + 1  if not looking else 0
-        if looking_streak >= ON_AFTER_YES and not lamp.is_on():
-            lamp.set_light(True)
-        elif away_streak >= OFF_AFTER_NO and lamp.is_on():
-            lamp.set_light(False)
+        try:
+            frame = camera.get_frame()
+            looking = brain.is_looking(frame)
+        except Exception as e:
+            print("brain error, treating as not looking:", e)
+            looking = False
+            time.sleep(3)             # back off a bit before retrying
+        streak = streak + 1 if looking else 0
+        lamp.set_light(streak >= 2)   # only turn on after looking for 2 consecutive checks
         time.sleep(1)
-
+        
 if brain.MANUAL_MODE:
     lamp.set_key_handler(brain.submit_manual_key)
     print("Click the lamp window, then press Y or N (no Enter needed).", flush=True)
