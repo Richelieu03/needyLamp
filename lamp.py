@@ -23,6 +23,7 @@ from lamp_skins import LampSkin, GooseneckLamp
 _target = 0.0      # Target brightness: 0 = off, 1 = on (changed by set_light)
 _level = 0.0       # Current brightness; moves toward _target each frame to create the fade
 FADE_SPEED = 3.0   # Fade speed in brightness units per second (about 1/3 s for a full fade)
+_minimized = False # Whether the window is currently minimized/iconified
 FPS = 60
 
 DEFAULT_SKIN = GooseneckLamp
@@ -38,6 +39,12 @@ def set_light(on: bool) -> None:
 
 def is_on() -> bool:
     return _target >= 0.5
+
+
+def is_minimized() -> bool:
+    """Whether the lamp window is currently minimized. Other modules (e.g.
+    the camera) can poll this to pause work while nobody can see the lamp."""
+    return _minimized
 
 
 def set_skin(skin: LampSkin) -> None:
@@ -65,7 +72,7 @@ def _step_level(level: float, target: float, dt: float) -> float:
 # ---------- Main loop ----------
 def run() -> None:
     """Open the window and run until it is closed or Esc is pressed. Must run on the main thread."""
-    global _level
+    global _level, _minimized
     pygame.init()
     screen = pygame.display.set_mode(_skin.size)
     pygame.display.set_caption(_skin.title)
@@ -88,6 +95,13 @@ def run() -> None:
                     set_light(not is_on())   # Manual toggle for testing
                 elif event.key in (pygame.K_y, pygame.K_n) and _key_handler is not None:
                     _key_handler("y" if event.key == pygame.K_y else "n")
+            elif event.type == pygame.WINDOWMINIMIZED:
+                _minimized = True
+            elif event.type in (pygame.WINDOWRESTORED, pygame.WINDOWSHOWN):
+                # On macOS, restoring from the Dock fires WINDOWSHOWN rather
+                # than WINDOWRESTORED (which never arrives there); other
+                # platforms may use either, so we clear on both.
+                _minimized = False
 
         _level = _step_level(_level, _target, dt)
         _skin.draw(screen, _level, is_on(), t)
