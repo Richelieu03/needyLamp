@@ -10,7 +10,6 @@ FACE_TRACK_INTERVAL = 0.15
 
 if not brain.MANUAL_MODE:
     import camera        # A: camera.get_frame() -> str (base64 JPEG)
-    import face_tracker   # find_face(frame) -> (x, y) in -1..1, or None
 
 def worker():
     streak = 0
@@ -27,7 +26,9 @@ def worker():
 
         try:
             frame = camera.get_frame()
-            lamp.set_focus(face_tracker.find_face(frame))
+            face = brain.locate_face(frame)  # (x, y) in 0..1, or None
+            # Flip x so the lamp follows the person as seen on screen.
+            lamp.set_focus((1.0 - 2.0 * face[0], 2.0 * face[1] - 1.0) if face else None)
             # Face position updates more often while the light is on; gaze
             # detection still runs about once per second as before.
             if time.monotonic() >= next_gaze_check:

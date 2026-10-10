@@ -260,6 +260,40 @@ def is_looking(frame: str) -> bool:
     return answer == "yes"
 
 
+def locate_face(image_base64: str, *, model_path: str | Path | None = None) -> tuple[float, float] | None:
+    """Return the nose tip's normalized position (x, y), each in [0, 1],
+    or None if there isn't exactly one face. Used for face tracking (e.g.
+    swiveling the lamp head toward where the person is standing), separate
+    from the yes/no gaze decision in analyze_image()/is_looking(). Runs its
+    own local MediaPipe detection pass - cheap enough at the once-a-second
+    rate this is called at, and keeps this independent of the carefully
+    tuned gaze-detection logic above."""
+    encoded = np.frombuffer(_image_bytes(image_base64), dtype=np.uint8)
+    bgr = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+    if bgr is None:
+        raise BrainError("Could not decode image")
+
+    try:
+        import mediapipe as mp
+    except ImportError as exc:
+        raise BrainError(
+            "MediaPipe is not installed in this Python interpreter. "
+            "Install it in PyCharm's interpreter with: python -m pip install mediapipe"
+        ) from exc
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    image = mp.Image(image_format=mp.ImageFormat.SRGB, data=np.ascontiguousarray(rgb))
+    detector = _create_landmarker(str(_model_file(model_path)))
+    try:
+        result = detector.detect(image)
+    except (RuntimeError, ValueError) as exc:
+        raise BrainError(f"Face landmark detection failed: {exc}") from exc
+
+    if len(result.face_landmarks) != 1:
+        return None
+    nose_tip = result.face_landmarks[0][1]   # landmark 1 = nose tip, same point used in _POSE_LANDMARK_IDS
+    return nose_tip.x, nose_tip.y
+
+
 def analyze_file(path: Path, *, model_path: str | Path | None = None) -> tuple[str, float]:
     if path.suffix.lower() not in {".jpg", ".jpeg", ".png", ".webp"}:
         raise BrainError(f"Unsupported image format: {path}")

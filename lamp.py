@@ -7,6 +7,7 @@ lamp looks; all drawing is delegated to a skin from lamp_skins.py.
 Interface:
     lamp.set_light(on: bool)   Set the lamp's target state. Returns immediately; safe to call from another thread.
     lamp.set_skin(skin)        Optional: choose a look (a LampSkin instance). Call before run().
+    lamp.set_face_position(x)  Compatibility: normalized horizontal face position in [0, 1].
     lamp.set_key_handler(fn)   Optional: forward Y/N presses from this window to the controller.
     lamp.set_focus(pos)        Optional: where the person's face is, as (x, y) in -1..1 screen space
                                (x: -1 left .. 1 right, y: -1 top .. 1 bottom), or None if no face.
@@ -47,6 +48,11 @@ def set_focus(pos) -> None:
     """Tell the lamp where the person's face is: (x, y) in -1..1, or None."""
     global _focus
     _focus = None if pos is None else (max(-1.0, min(1.0, pos[0])), max(-1.0, min(1.0, pos[1])))
+
+
+def set_face_position(x: float | None) -> None:
+    """Accept a normalized camera x position from the face-tracking interface."""
+    set_focus(None if x is None else (1.0 - 2.0 * x, 0.0))
 
 
 def is_on() -> bool:
