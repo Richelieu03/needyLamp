@@ -13,6 +13,7 @@ To add a new look:
 
 import math
 import pygame
+from lamp_behavior import IdleBehavior
 
 
 def mix(c1, c2, t):
@@ -129,7 +130,9 @@ class GooseneckLamp(DeskLamp):
 
     Its pose follows the on/off state with a springy motion: when on, the head
     lifts (with a small bounce) and aims the light at the desk; when off, the
-    neck sags, the head droops and it sways gently, as if sighing.
+    neck sags and the head droops.
+    Its personality (looking around, peeking, dozing, hopping...) comes from
+    IdleBehavior in lamp_behavior.py; this class only draws what it is told.
     Colors and text are inherited from DeskLamp.
 
     Rendering tricks that keep it soft rather than stiff:
@@ -173,6 +176,8 @@ class GooseneckLamp(DeskLamp):
         self.pose = 0.0
         self.vel = 0.0
         self.last_t = None
+        self.behavior = IdleBehavior()
+        self.zzz_font = pygame.font.SysFont(None, 30)
         self._build_shade_shapes()
 
     # ---------- Shape helpers (shade-local coordinates, opening along +x) ----------
@@ -201,11 +206,11 @@ class GooseneckLamp(DeskLamp):
         self.bulb_shape = [(self.SHADE_LEN - 0.5 + 4 * math.cos(a), 17 * math.sin(a))
                            for a in (2 * math.pi * i / 20 for i in range(20))]
 
-    def _neck_points(self, bend):
+    def _neck_points(self, bend, lift=0.0):
         """Points along the neck as ((x, y), tangent_angle, radius), from base to head."""
         n = self.NECK_SEGMENTS
         ds = self.NECK_LENGTH / n
-        x, y = self.BASE_POS[0], self.BASE_POS[1] - 20
+        x, y = self.BASE_POS[0], self.BASE_POS[1] - 20 - lift
         out = [((x, y), math.radians(-90), self.NECK_BASE_R)]
         for i in range(n):
             s = (i + 0.5) / n
@@ -292,12 +297,12 @@ class GooseneckLamp(DeskLamp):
 
         # ----- Pose for this frame -----
         p = self._step_pose(on, t)
-        sway = (1 - level) * 3.0 * math.sin(t * 1.3)        # idle sigh when off (degrees)
-        bob = 1.5 * level * math.sin(t * 2)                  # gentle bob when on (degrees)
-        bend = lerp(*self.NECK_BEND, p) + sway + bob
-        neck = self._neck_points(bend)
+        mood = self.behavior.update(on, t)
+        bend = lerp(*self.NECK_BEND, p) + mood.bend
+        neck = self._neck_points(bend, mood.hop)
         head = neck[-1][0]
-        angle = math.radians(-90 + bend + lerp(*self.SHADE_TILT, p))
+        angle = math.radians(-90 + bend + lerp(*self.SHADE_TILT, p) + mood.tilt)
+        glow = max(level, mood.peek)        # bulb glow: full light, or a small peek
         ca, sa = math.cos(angle), math.sin(angle)
 
         def to_world(x, y):
@@ -320,7 +325,11 @@ class GooseneckLamp(DeskLamp):
         metal_dark = mix(metal, (0, 0, 0), 0.35)
         metal_hi = mix(metal, (255, 255, 255), 0.35)
         bx, by = self.BASE_POS
-        pygame.draw.ellipse(c, mix(desk, (0, 0, 0), 0.35), ((bx - 72) * S, (by - 8) * S, 144 * S, 24 * S))
+        # Shadow stays on the desk and shrinks while the lamp hops
+        sh = max(0.5, 1 - mood.hop / 50)
+        pygame.draw.ellipse(c, mix(desk, (0, 0, 0), 0.35),
+                            ((bx - 72 * sh) * S, (by - 8) * S, 144 * sh * S, 24 * S))
+        by -= mood.hop
         pygame.draw.ellipse(c, metal_dark, ((bx - 64) * S, (by - 14) * S, 128 * S, 26 * S))
         pygame.draw.ellipse(c, metal, ((bx - 60) * S, (by - 17) * S, 120 * S, 22 * S))
 
@@ -359,22 +368,45 @@ class GooseneckLamp(DeskLamp):
         pygame.draw.polygon(c, shade_hi, world(self.shade_highlight))
 
         # Opening: the inside glows when lit, plus a light rim
-        pygame.draw.polygon(c, mix(*self.INSIDE, level), world(self.mouth))
+        pygame.draw.polygon(c, mix(*self.INSIDE, glow), world(self.mouth))
         pygame.draw.lines(c, shade_hi, True, world(self.mouth), 2 * S)
 
         # Bulb seen through the opening: a small ellipse inside the mouth,
         # so it always stays within the shade
         bulb = to_world(self.SHADE_LEN, 0)
-        pygame.draw.polygon(c, mix(*self.BULB, level), world(self.bulb_shape))
+        pygame.draw.polygon(c, mix(*self.BULB, glow), world(self.bulb_shape))
 
         # ----- Bloom over the bulb -----
-        if level > 0.01:
-            bloom = self._bloom_layer(bulb, level, t)
+        if glow > 0.01:
+            bloom = self._bloom_layer(bulb, glow, t)
             c.blit(self._blur_to_canvas(bloom), (0, 0))
 
         # ----- Scale the 2x canvas down to the window (anti-aliasing) -----
         screen.blit(pygame.transform.smoothscale(c, (w, h)), (0, 0))
-        self.draw_text(screen, level, on)
+        if mood.zzz > 0.05:
+            self._draw_zzz(screen, to_world(0, -self.SHADE_BACK - 6), mood.zzz, t)
+        self._draw_caption(screen, level, on, mood.message)
+
+    def _draw_zzz(self, screen, origin, amount, t):
+        """Three z's drifting up from the top of the head while it sleeps."""
+        for k in range(3):
+            ph = (t * 0.35 + k / 3) % 1.0
+            x = origin[0] + 10 + ph * 45 + 6 * math.sin(ph * 6)
+            y = origin[1] - 10 - ph * 70
+            label = self.zzz_font.render("z", True, (200, 205, 230))
+            lw, lh = label.get_size()
+            k_scale = (0.5 + 0.8 * ph)                 # z's grow as they float up
+            label = pygame.transform.smoothscale(
+                label, (max(1, int(lw * k_scale)), max(1, int(lh * k_scale))))
+            label.set_alpha(int(255 * amount * math.sin(math.pi * ph)))
+            screen.blit(label, (x, y))
+
+    def _draw_caption(self, screen, level, on, message):
+        if message is None:
+            self.draw_text(screen, level, on)
+            return
+        label = self.font.render(message, True, mix(*self.TEXT, level))
+        screen.blit(label, label.get_rect(center=(self.size[0] // 2, 555)))
 
 
 class ImageLamp(LampSkin):
