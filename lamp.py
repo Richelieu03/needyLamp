@@ -7,6 +7,7 @@ lamp looks; all drawing is delegated to a skin from lamp_skins.py.
 Interface:
     lamp.set_light(on: bool)   Set the lamp's target state. Returns immediately; safe to call from another thread.
     lamp.set_skin(skin)        Optional: choose a look (a LampSkin instance). Call before run().
+    lamp.set_key_handler(fn)   Optional: forward Y/N presses from this window to the controller.
     lamp.set_focus(pos)        Optional: where the person's face is, as (x, y) in -1..1 screen space
                                (x: -1 left .. 1 right, y: -1 top .. 1 bottom), or None if no face.
                                Safe to call from another thread. The skin decides how to react.
@@ -17,6 +18,8 @@ Standalone test:
                                The mouse stands in for the person's face, so you can test head turning.
 """
 
+from collections.abc import Callable
+
 import pygame
 from lamp_skins import LampSkin, GooseneckLamp
 
@@ -25,10 +28,12 @@ _target = 0.0      # Target brightness: 0 = off, 1 = on (changed by set_light)
 _focus = None      # Face position (x, y) in -1..1, or None (changed by set_focus)
 _level = 0.0       # Current brightness; moves toward _target each frame to create the fade
 FADE_SPEED = 3.0   # Fade speed in brightness units per second (about 1/3 s for a full fade)
+_minimized = False # Whether the window is currently minimized/iconified
 FPS = 60
 
 DEFAULT_SKIN = GooseneckLamp
 _skin: LampSkin = DEFAULT_SKIN()
+_key_handler: Callable[[str], None] | None = None
 
 
 def set_light(on: bool) -> None:
@@ -47,10 +52,22 @@ def is_on() -> bool:
     return _target >= 0.5
 
 
+def is_minimized() -> bool:
+    """Whether the lamp window is currently minimized. Other modules (e.g.
+    the camera) can poll this to pause work while nobody can see the lamp."""
+    return _minimized
+
+
 def set_skin(skin: LampSkin) -> None:
     """Choose which skin draws the lamp. Call before run()."""
     global _skin
     _skin = skin
+
+
+def set_key_handler(handler: Callable[[str], None] | None) -> None:
+    """Forward Y/N key presses to the controller when one is registered."""
+    global _key_handler
+    _key_handler = handler
 
 
 def _step_level(level: float, target: float, dt: float) -> float:
@@ -69,7 +86,7 @@ def run(mouse_focus: bool = False) -> None:
     Open the window and run until it is closed or Esc is pressed. Must run on the main thread.
     mouse_focus=True makes the mouse act as the person's face (for testing without a camera).
     """
-    global _level
+    global _level, _minimized
     pygame.init()
     screen = pygame.display.set_mode(_skin.size)
     pygame.display.set_caption(_skin.title)
@@ -90,6 +107,15 @@ def run(mouse_focus: bool = False) -> None:
                     running = False
                 elif event.key == pygame.K_SPACE:
                     set_light(not is_on())   # Manual toggle for testing
+                elif event.key in (pygame.K_y, pygame.K_n) and _key_handler is not None:
+                    _key_handler("y" if event.key == pygame.K_y else "n")
+            elif event.type == pygame.WINDOWMINIMIZED:
+                _minimized = True
+            elif event.type in (pygame.WINDOWRESTORED, pygame.WINDOWSHOWN):
+                # On macOS, restoring from the Dock fires WINDOWSHOWN rather
+                # than WINDOWRESTORED (which never arrives there); other
+                # platforms may use either, so we clear on both.
+                _minimized = False
             elif event.type == pygame.MOUSEMOTION and mouse_focus:
                 w, h = screen.get_size()
                 set_focus((event.pos[0] / w * 2 - 1, event.pos[1] / h * 2 - 1))

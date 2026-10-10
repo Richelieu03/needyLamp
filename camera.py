@@ -5,6 +5,7 @@ Contract (see main.py):
 """
 import atexit
 import base64
+import sys
 import threading
 
 import cv2
@@ -16,16 +17,35 @@ _cap = None
 _lock = threading.Lock()
 
 
+def _request_camera_access():
+    """Try to open the camera once. On macOS this is also what triggers the
+    OS camera-permission prompt on first use, so "requesting access" and
+    "opening the camera" are the same call here. If access was not granted
+    (or there is no camera), exit cleanly with a friendly message instead of
+    raising an exception: in main.py's daemon worker thread, SystemExit is
+    swallowed silently by `threading` (no scary traceback), and in a plain
+    script it just prints our message and exits."""
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        cap.release()
+        print(
+            "Camera unavailable: camera access was not granted (or no "
+            "camera was found). On macOS, check System Settings > Privacy "
+            "& Security > Camera, allow access for this app, then run "
+            "again.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    return cap
+
+
 def _get_cap():
     """Lazily open the camera singleton. Reopening it every second is
     expensive and prone to failure."""
     global _cap
     with _lock:
         if _cap is None or not _cap.isOpened():
-            cap = cv2.VideoCapture(0)
-            if not cap.isOpened():
-                raise RuntimeError("Failed to open the camera (check OS camera permissions, or whether another app is using it)")
-            _cap = cap
+            _cap = _request_camera_access()
         return _cap
 
 
