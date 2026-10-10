@@ -42,13 +42,8 @@ class LampSkin:
     def setup(self) -> None:
         """Called once after pygame.init(). Load fonts and images here."""
 
-    def set_focus(self, focus) -> None:
-        """
-        Called every frame before draw() with the person's face position:
-        (x, y) in -1..1 screen space, or None. Skins that don't react can ignore it.
-        """
-
-    def draw(self, screen: pygame.Surface, level: float, on: bool, t: float) -> None:
+    def draw(self, screen: pygame.Surface, level: float, on: bool, t: float,
+             face_x: float | None = None) -> None:
         """
         Draw one frame.
 
@@ -56,6 +51,9 @@ class LampSkin:
         level:  current brightness, 0.0 (off) to 1.0 (on); already faded smoothly
         on:     the target state (True = should be on)
         t:      seconds since start, for animations
+        face_x: normalized horizontal face position in [0, 1] (0 = left edge
+                of the camera frame, 1 = right edge), or None if no face is
+                currently detected. Optional - most skins can ignore it.
         """
         raise NotImplementedError
 
@@ -84,7 +82,7 @@ class DeskLamp(LampSkin):
                                  True, mix(*self.TEXT, level))
         screen.blit(label, label.get_rect(center=(self.size[0] // 2, 555)))
 
-    def draw(self, screen, level, on, t):
+    def draw(self, screen, level, on, t, face_x=None):
         w, h = self.size
         cx = w // 2
         shade_top_y, shade_bottom_y, desk_y = 150, 250, 500
@@ -139,8 +137,7 @@ class GooseneckLamp(DeskLamp):
     neck sags and the head droops.
     Its personality (looking around, peeking, dozing, hopping...) comes from
     IdleBehavior in lamp_behavior.py; this class only draws what it is told.
-    When it is on and knows where your face is (set_focus), it perks up, turns
-    its opening toward you and follows you as you move.
+    When a face is tracked (face_x), the head swivels toward its horizontal position.
     Colors and text are inherited from DeskLamp.
 
     Rendering tricks that keep it soft rather than stiff:
@@ -176,12 +173,8 @@ class GooseneckLamp(DeskLamp):
 
     INSIDE = ((30, 32, 36), (255, 236, 180))   # Inside of the shade (off, on)
 
-    # Reacting to your face (only while on)
-    TURN_TO_YOU = 28        # Degrees the shade turns toward you (0 = side view)
-    FOLLOW_X = 20           # Degrees of head tilt as you move left/right
-    FOLLOW_Y = 16           # Degrees of head tilt as you move up/down
-    PERK_UP = 6             # Degrees the neck straightens when it sees you
-    FOCUS_SPEED = 4.0       # How quickly it turns to you (higher = faster)
+    TRACK_MAX_DEG = 25.0                   # Max head swivel toward a tracked face, in degrees
+    TRACK_SMOOTH = 4.0                     # How fast the swivel chases its target (higher = snappier)
 
     def setup(self):
         super().setup()
@@ -192,10 +185,8 @@ class GooseneckLamp(DeskLamp):
         self.vel = 0.0
         self.last_t = None
         self.behavior = IdleBehavior()
-        self.focus = None
-        self.attention = 0.0        # 0 = not looking at you, 1 = fully turned to you
-        self.fx, self.fy = 0.0, 0.0  # Smoothed face position
-        self.focus_t = None
+        self.track = 0.0       # Current head swivel toward the tracked face, in degrees
+        self.track_last_t = None
         # Text is drawn onto the 2x canvas so it gets the same smoothing as the lamp
         self.caption_font = pygame.font.SysFont(None, 28 * s)
         self.zzz_font = pygame.font.SysFont(None, 30 * s)
@@ -241,38 +232,6 @@ class GooseneckLamp(DeskLamp):
             out.append(((x, y), a, lerp(self.NECK_BASE_R, self.NECK_TIP_R, (i + 1) / n)))
         return out
 
-    def set_focus(self, focus):
-        self.focus = focus
-
-    def _step_focus(self, on, t):
-        """Smoothly turn attention toward the face while on, and follow it."""
-        dt = 0.0 if self.focus_t is None else min(t - self.focus_t, 1 / 30)
-        self.focus_t = t
-        k = min(1.0, self.FOCUS_SPEED * dt)
-        target = 1.0 if (on and self.focus is not None) else 0.0
-        self.attention += (target - self.attention) * k
-        if self.focus is not None:
-            self.fx += (self.focus[0] - self.fx) * k * 1.3
-            self.fy += (self.focus[1] - self.fy) * k * 1.3
-
-    def _shade_shapes(self, yaw):
-        """
-        Shade shapes for this frame, with a fake 3D turn toward the viewer:
-        the shade gets shorter and its opening widens into a visible circle.
-        """
-        kx = math.cos(yaw)
-        sy = math.sin(yaw)
-        squash = lambda shape: [(x * kx, y) for x, y in shape]
-        L = self.SHADE_LEN * kx
-        mouth_rx = 7 * kx + self.SHADE_MOUTH * 0.75 * sy
-        bulb_rx = 4 * kx + 15 * sy
-        mouth = [(L + mouth_rx * math.cos(a), self.SHADE_MOUTH * math.sin(a))
-                 for a in (2 * math.pi * i / 32 for i in range(32))]
-        bulb = [(L - 0.5 * kx + bulb_rx * math.cos(a), 17 * math.sin(a))
-                for a in (2 * math.pi * i / 24 for i in range(24))]
-        return (squash(self.shade_outline), squash(self.shade_shadow),
-                squash(self.shade_highlight), mouth, bulb, L)
-
     # ---------- Motion ----------
     def _step_pose(self, on, t):
         """Spring the pose toward 1 (on) or 0 (off); slight overshoot = lively bounce."""
@@ -284,8 +243,18 @@ class GooseneckLamp(DeskLamp):
         self.pose += self.vel * dt
         return self.pose
 
+    def _step_track(self, face_x, t):
+        """Smoothly swivel the head toward the tracked face's horizontal
+        position; recenters (target 0) when no face is detected. Separate
+        timebase from _step_pose so it degrades gracefully either way."""
+        dt = 0.0 if self.track_last_t is None else min(t - self.track_last_t, 1 / 30)
+        self.track_last_t = t
+        target_deg = 0.0 if face_x is None else (face_x - 0.5) * 2 * self.TRACK_MAX_DEG
+        self.track += (target_deg - self.track) * min(1.0, self.TRACK_SMOOTH * dt)
+        return self.track
+
     # ---------- Light ----------
-    def _light_layer(self, to_world, angle, level, desk_y, length):
+    def _light_layer(self, to_world, angle, level, desk_y):
         """Cone, desk pool and ambient glow at design size (blurred later)."""
         w, h = self.size
         q = 1
@@ -298,9 +267,9 @@ class GooseneckLamp(DeskLamp):
             length = min(length, 900)
             return (pt[0] + math.cos(ang) * length, pt[1] + dy * length)
 
-        mouth_l = to_world(length, -self.SHADE_MOUTH)
-        mouth_r = to_world(length, self.SHADE_MOUTH)
-        mouth_c = to_world(length, 0)
+        mouth_l = to_world(self.SHADE_LEN, -self.SHADE_MOUTH)
+        mouth_r = to_world(self.SHADE_LEN, self.SHADE_MOUTH)
+        mouth_c = to_world(self.SHADE_LEN, 0)
 
         # Ambient warm glow around the head
         for r, alpha in ((170, 8), (120, 10), (75, 12)):
@@ -341,7 +310,7 @@ class GooseneckLamp(DeskLamp):
         return pygame.transform.smoothscale(small, (w * S, h * S))
 
     # ---------- Frame ----------
-    def draw(self, screen, level, on, t):
+    def draw(self, screen, level, on, t, face_x=None):
         w, h = self.size
         S = self.SUPERSAMPLE
         desk_y = self.DESK_Y
@@ -351,16 +320,11 @@ class GooseneckLamp(DeskLamp):
         # ----- Pose for this frame -----
         p = self._step_pose(on, t)
         mood = self.behavior.update(on, t)
-        self._step_focus(on, t)
-        att = self.attention
-        bend = lerp(*self.NECK_BEND, p) + mood.bend - self.PERK_UP * att
+        track = self._step_track(face_x, t)                  # head swivel toward the tracked face (degrees)
+        bend = lerp(*self.NECK_BEND, p) + mood.bend
         neck = self._neck_points(bend, mood.hop)
         head = neck[-1][0]
-        follow = att * (-self.fx * self.FOLLOW_X + self.fy * self.FOLLOW_Y)
-        angle = math.radians(-90 + bend + lerp(*self.SHADE_TILT, p) + mood.tilt + follow)
-        # Turn toward you; a bit more if you are behind its head (to the left)
-        yaw = math.radians(att * (self.TURN_TO_YOU + 12 * max(0.0, -self.fx)))
-        outline, shadow, highlight, mouth, bulb_shape, shade_len = self._shade_shapes(yaw)
+        angle = math.radians(-90 + bend + lerp(*self.SHADE_TILT, p) + mood.tilt + track)
         glow = max(level, mood.peek)        # bulb glow: full light, or a small peek
         ca, sa = math.cos(angle), math.sin(angle)
 
@@ -376,7 +340,7 @@ class GooseneckLamp(DeskLamp):
 
         # ----- Soft light -----
         if level > 0.01:
-            light = self._light_layer(to_world, angle, level, desk_y, shade_len)
+            light = self._light_layer(to_world, angle, level, desk_y)
             c.blit(self._blur_to_canvas(light), (0, 0))
 
         # ----- Base -----
@@ -422,23 +386,22 @@ class GooseneckLamp(DeskLamp):
         shade_dark = mix(shade, (0, 0, 0), 0.3)
         shade_hi = mix(shade, (255, 255, 255), 0.3)
         world = lambda shape: [P(to_world(x, y)) for x, y in shape]
-        pygame.draw.polygon(c, shade, world(outline))
-        pygame.draw.polygon(c, shade_dark, world(shadow))
-        pygame.draw.polygon(c, shade_hi, world(highlight))
+        pygame.draw.polygon(c, shade, world(self.shade_outline))
+        pygame.draw.polygon(c, shade_dark, world(self.shade_shadow))
+        pygame.draw.polygon(c, shade_hi, world(self.shade_highlight))
 
         # Opening: the inside glows when lit, plus a light rim
-        pygame.draw.polygon(c, mix(*self.INSIDE, glow), world(mouth))
-        pygame.draw.lines(c, shade_hi, True, world(mouth), 2 * S)
+        pygame.draw.polygon(c, mix(*self.INSIDE, glow), world(self.mouth))
+        pygame.draw.lines(c, shade_hi, True, world(self.mouth), 2 * S)
 
         # Bulb seen through the opening: a small ellipse inside the mouth,
         # so it always stays within the shade
-        bulb = to_world(shade_len, 0)
-        pygame.draw.polygon(c, mix(*self.BULB, glow), world(bulb_shape))
+        bulb = to_world(self.SHADE_LEN, 0)
+        pygame.draw.polygon(c, mix(*self.BULB, glow), world(self.bulb_shape))
 
         # ----- Bloom over the bulb -----
         if glow > 0.01:
-            # Brighter glare when the opening faces you
-            bloom = self._bloom_layer(bulb, min(1.5, glow * (1 + 0.5 * math.sin(yaw))), t)
+            bloom = self._bloom_layer(bulb, glow, t)
             c.blit(self._blur_to_canvas(bloom), (0, 0))
 
         # ----- Text, drawn on the canvas too -----
@@ -495,7 +458,7 @@ class ImageLamp(LampSkin):
         self.on_img = pygame.transform.smoothscale(
             pygame.image.load(self.ON_IMAGE).convert_alpha(), size)
 
-    def draw(self, screen, level, on, t):
+    def draw(self, screen, level, on, t, face_x=None):
         screen.fill((0, 0, 0))
         screen.blit(self.off_img, (0, 0))
         self.on_img.set_alpha(int(255 * level))   # fade ON picture in/out
@@ -507,7 +470,7 @@ class SimpleBulb(LampSkin):
 
     size = (400, 400)
 
-    def draw(self, screen, level, on, t):
+    def draw(self, screen, level, on, t, face_x=None):
         screen.fill(mix((10, 10, 15), (40, 35, 20), level))
         center = (self.size[0] // 2, self.size[1] // 2)
         pygame.draw.circle(screen, mix((60, 60, 65), (255, 230, 150), level), center, 80)

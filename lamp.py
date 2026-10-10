@@ -8,14 +8,11 @@ Interface:
     lamp.set_light(on: bool)   Set the lamp's target state. Returns immediately; safe to call from another thread.
     lamp.set_skin(skin)        Optional: choose a look (a LampSkin instance). Call before run().
     lamp.set_key_handler(fn)   Optional: forward Y/N presses from this window to the controller.
-    lamp.set_focus(pos)        Optional: where the person's face is, as (x, y) in -1..1 screen space
-                               (x: -1 left .. 1 right, y: -1 top .. 1 bottom), or None if no face.
-                               Safe to call from another thread. The skin decides how to react.
+    lamp.set_face_position(x)  Normalized horizontal face position in [0, 1], or None if no face.
     lamp.run()                 Open the window and run the pygame main loop (must be called on the main thread).
 
 Standalone test:
     python lamp.py             Press Space to toggle on/off; press Esc or close the window to quit.
-                               The mouse stands in for the person's face, so you can test head turning.
 """
 
 from collections.abc import Callable
@@ -25,10 +22,10 @@ from lamp_skins import LampSkin, GooseneckLamp
 
 # ---------- State ----------
 _target = 0.0      # Target brightness: 0 = off, 1 = on (changed by set_light)
-_focus = None      # Face position (x, y) in -1..1, or None (changed by set_focus)
 _level = 0.0       # Current brightness; moves toward _target each frame to create the fade
 FADE_SPEED = 3.0   # Fade speed in brightness units per second (about 1/3 s for a full fade)
 _minimized = False # Whether the window is currently minimized/iconified
+_face_x = None     # Normalized horizontal face position [0, 1]; None = no face detected
 FPS = 60
 
 DEFAULT_SKIN = GooseneckLamp
@@ -42,10 +39,13 @@ def set_light(on: bool) -> None:
     _target = 1.0 if on else 0.0
 
 
-def set_focus(pos) -> None:
-    """Tell the lamp where the person's face is: (x, y) in -1..1, or None."""
-    global _focus
-    _focus = None if pos is None else (max(-1.0, min(1.0, pos[0])), max(-1.0, min(1.0, pos[1])))
+def set_face_position(x: float | None) -> None:
+    """Report where the tracked face is, horizontally, in the camera frame
+    (0 = left edge, 1 = right edge), or None if no face is currently
+    detected. Only updates a number and never draws, so it never blocks;
+    safe to call from another thread."""
+    global _face_x
+    _face_x = x
 
 
 def is_on() -> bool:
@@ -81,11 +81,8 @@ def _step_level(level: float, target: float, dt: float) -> float:
 
 
 # ---------- Main loop ----------
-def run(mouse_focus: bool = False) -> None:
-    """
-    Open the window and run until it is closed or Esc is pressed. Must run on the main thread.
-    mouse_focus=True makes the mouse act as the person's face (for testing without a camera).
-    """
+def run() -> None:
+    """Open the window and run until it is closed or Esc is pressed. Must run on the main thread."""
     global _level, _minimized
     pygame.init()
     screen = pygame.display.set_mode(_skin.size)
@@ -116,17 +113,13 @@ def run(mouse_focus: bool = False) -> None:
                 # than WINDOWRESTORED (which never arrives there); other
                 # platforms may use either, so we clear on both.
                 _minimized = False
-            elif event.type == pygame.MOUSEMOTION and mouse_focus:
-                w, h = screen.get_size()
-                set_focus((event.pos[0] / w * 2 - 1, event.pos[1] / h * 2 - 1))
 
         _level = _step_level(_level, _target, dt)
-        _skin.set_focus(_focus)
-        _skin.draw(screen, _level, is_on(), t)
+        _skin.draw(screen, _level, is_on(), t, _face_x)
         pygame.display.flip()
 
     pygame.quit()
 
 
 if __name__ == "__main__":
-    run(mouse_focus=True)
+    run()
