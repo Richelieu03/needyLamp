@@ -69,6 +69,8 @@ def worker():
                     print("B module: multiple faces detected; lamp ON", flush=True)
                 multi_seen = True
                 lamp.set_light(True)
+                servo_head.set_light(True)
+                
                 streaks = {"yes": 0, "no": 0}
                 next_gaze_check = time.monotonic() + GAZE_CHECK_INTERVAL
             else:
