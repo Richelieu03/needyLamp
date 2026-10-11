@@ -5,6 +5,7 @@ Interface:
     servo_head.connect(port=None)   Open the serial port (auto-detects /dev/cu.usbmodem* / usbserial*).
     servo_head.look_at(face_x)      face_x in 0..1 from brain.locate_face(), or None if no face.
     servo_head.set_angle(angle)     Send a raw angle (clamped to MIN_ANGLE..MAX_ANGLE).
+    servo_head.set_light(on)        Fade the physical lamp's LED on/off (sent only when it changes).
 
 Smooth following:
     - face positions are smoothed (exponential moving average) so detection noise doesn't jitter the head
@@ -27,7 +28,7 @@ BAUD = 115200
 CENTER = 90
 MIN_ANGLE = 30
 MAX_ANGLE = 150
-INVERT = False       # set True if the head turns the wrong way
+INVERT = True      # set True if the head turns the wrong way
 
 SMOOTHING = 0.35     # 0..1: higher follows faster, lower is calmer
 DEAD_ZONE = 4        # ignore changes smaller than this (degrees)
@@ -37,6 +38,7 @@ _port = None
 _last_sent = None
 _smooth_x = None     # smoothed face position (0..1)
 _last_seen = 0.0     # time the face was last seen
+_light_on = None     # last light state sent to the Arduino
 
 
 def _find_port():
@@ -68,6 +70,15 @@ def set_angle(angle, force=False):
         _last_sent = angle
 
 
+def set_light(on):
+    """Turn the physical lamp's LED on or off (the Arduino fades it)."""
+    global _light_on
+    if _port is None or on == _light_on:
+        return
+    _port.write(b"L1\n" if on else b"L0\n")
+    _light_on = on
+
+
 def look_at(face_x):
     """Turn toward a face at face_x (0 = left edge of the camera image, 1 = right edge)."""
     global _smooth_x, _last_seen
@@ -89,9 +100,12 @@ def look_at(face_x):
 
 if __name__ == "__main__":
     connect()
-    print("Connected. Sweeping...")
+    print("Connected. Light on, sweeping...")
+    set_light(True)
     for angle in (CENTER, MIN_ANGLE, CENTER, MAX_ANGLE, CENTER):
         print("angle:", angle)
         set_angle(angle, force=True)
         time.sleep(1.5)
+    set_light(False)
+    time.sleep(1)
     print("Done.")

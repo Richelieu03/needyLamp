@@ -31,8 +31,10 @@ def update_light(looking, streaks):
         streaks["yes"] = 0
     if streaks["yes"] >= ON_AFTER_YES:
         lamp.set_light(True)
+        servo_head.set_light(True)    # physical LED follows the on-screen lamp
     elif streaks["no"] >= OFF_AFTER_NO:
         lamp.set_light(False)
+        servo_head.set_light(False)
     # otherwise keep the current state
 
 
