@@ -39,12 +39,14 @@ def update_light(looking, streaks):
 def worker():
     streaks = {"yes": 0, "no": 0}
     next_gaze_check = 0.0
+    multi_seen = False
     while True:
         if not brain.MANUAL_MODE and lamp.is_minimized():
             # Release the camera while the window is minimized.
             camera.release()
             streaks = {"yes": 0, "no": 0}
             next_gaze_check = 0.0
+            multi_seen = False
             lamp.set_focus(None)
             servo_head.look_at(None)     # servo: recenters after a short hold
             time.sleep(1)
@@ -52,15 +54,26 @@ def worker():
 
         try:
             frame = camera.get_frame()
-            face = brain.locate_face(frame)  # (x, y) in 0..1, or None
+            face, face_count = brain.locate_face_and_count(frame)  # (x, y) or None; count capped at 2
             # Flip x so the lamp follows the person as seen on screen.
             lamp.set_focus((1.0 - 2.0 * face[0], 2.0 * face[1] - 1.0) if face else None)
             servo_head.look_at(face[0] if face else None)   # servo: smoothed, holds briefly if face is lost
             # Face position updates more often while the light is on; gaze
             # detection still runs about once per second as before.
-            if time.monotonic() >= next_gaze_check:
-                update_light(brain.is_looking(frame), streaks)
+            if face_count >= 2:
+                # A group keeps the lamp on, regardless of anyone's gaze.
+                # Reset both streaks so one missed detection cannot switch it off.
+                if not multi_seen:
+                    print("B module: multiple faces detected; lamp ON", flush=True)
+                multi_seen = True
+                lamp.set_light(True)
+                streaks = {"yes": 0, "no": 0}
                 next_gaze_check = time.monotonic() + GAZE_CHECK_INTERVAL
+            else:
+                multi_seen = False
+                if time.monotonic() >= next_gaze_check:
+                    update_light(brain.is_looking(frame), streaks)
+                    next_gaze_check = time.monotonic() + GAZE_CHECK_INTERVAL
         except Exception as e:
             print("brain error, treating as not looking:", e)
             update_light(False, streaks)   # repeated errors turn the lamp off, a single one doesn't
