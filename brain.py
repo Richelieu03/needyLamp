@@ -116,7 +116,7 @@ def _create_landmarker(path: str):
     options = mp.tasks.vision.FaceLandmarkerOptions(
         base_options=mp.tasks.BaseOptions(model_asset_path=path),
         running_mode=mp.tasks.vision.RunningMode.IMAGE,
-        num_faces=2,  # reject ambiguous images with multiple faces
+        num_faces=2,  # two detections are enough to identify a multi-face frame
     )
     try:
         return mp.tasks.vision.FaceLandmarker.create_from_options(options)
@@ -260,14 +260,15 @@ def is_looking(frame: str) -> bool:
     return answer == "yes"
 
 
-def locate_face(image_base64: str, *, model_path: str | Path | None = None) -> tuple[float, float] | None:
-    """Return the nose tip's normalized position (x, y), each in [0, 1],
-    or None if there isn't exactly one face. Used for face tracking (e.g.
-    swiveling the lamp head toward where the person is standing), separate
-    from the yes/no gaze decision in analyze_image()/is_looking(). Runs its
-    own local MediaPipe detection pass - cheap enough at the once-a-second
-    rate this is called at, and keeps this independent of the carefully
-    tuned gaze-detection logic above."""
+def locate_face_and_count(
+    image_base64: str, *, model_path: str | Path | None = None
+) -> tuple[tuple[float, float] | None, int]:
+    """Return (nose position, face count), capped at two detected faces.
+
+    The nose position is only provided when exactly one face is visible.
+    Two faces are enough for main.py to keep the lamp on without choosing
+    which person to track. This runs independently of the gaze decision.
+    """
     encoded = np.frombuffer(_image_bytes(image_base64), dtype=np.uint8)
     bgr = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
     if bgr is None:
@@ -288,10 +289,17 @@ def locate_face(image_base64: str, *, model_path: str | Path | None = None) -> t
     except (RuntimeError, ValueError) as exc:
         raise BrainError(f"Face landmark detection failed: {exc}") from exc
 
-    if len(result.face_landmarks) != 1:
-        return None
+    face_count = len(result.face_landmarks)
+    if face_count != 1:
+        return None, face_count
     nose_tip = result.face_landmarks[0][1]   # landmark 1 = nose tip, same point used in _POSE_LANDMARK_IDS
-    return nose_tip.x, nose_tip.y
+    return (nose_tip.x, nose_tip.y), face_count
+
+
+def locate_face(image_base64: str, *, model_path: str | Path | None = None) -> tuple[float, float] | None:
+    """Keep the existing face-tracking interface for other callers."""
+    position, _ = locate_face_and_count(image_base64, model_path=model_path)
+    return position
 
 
 def analyze_file(path: Path, *, model_path: str | Path | None = None) -> tuple[str, float]:
